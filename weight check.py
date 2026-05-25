@@ -1,5 +1,9 @@
-﻿import gradio as gr
+import streamlit as st
 import pandas as pd
+import io
+
+# 設定網頁標題與分頁標籤（這是 Streamlit 的優勢，可以做得很像官網）
+st.set_page_config(page_title="出貨重量自動核對工具", page_icon="🚚", layout="wide")
 
 def clean_and_format_key(series):
     """
@@ -15,11 +19,12 @@ def clean_and_format_key(series):
 
 def process_shipping_data(shipping_file, weight_file):
     try:
+        # 💡 Streamlit 的優化：直接讀取上傳的檔案物件，移除原本的 .name（雲端才不會出錯）
         # 1. 讀取出貨明細表 (標頭在第二列 header=1)
-        df_ship = pd.read_excel(shipping_file.name, header=1)
+        df_ship = pd.read_excel(shipping_file, header=1)
         
         # 2. 讀取包裝重量表 (標頭在第一列 header=0)
-        df_weight = pd.read_excel(weight_file.name, header=0)
+        df_weight = pd.read_excel(weight_file, header=0)
         
         # 清理兩張表的欄位名稱空格
         df_ship.columns = df_ship.columns.str.strip()
@@ -68,39 +73,60 @@ def process_shipping_data(shipping_file, weight_file):
             if col in df_merged.columns:
                 df_merged = df_merged.drop(columns=[col])
                 
-        # 8. 匯出成全新的 Excel 檔案
-        output_path = "出貨明細_已完成重量核對.xlsx"
-        df_merged.to_excel(output_path, index=False)
+        # 💡 雲端優化：將 Excel 存入記憶體快取，方便 Streamlit 提供下載按鈕
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_merged.to_excel(writer, index=False)
+        xlsx_data = output.getvalue()
         
         success_count = df_merged['重量(箱)'].notna().sum()
         total_count = len(df_merged)
         
-        return output_path, f"🎉 【終極防呆版】處理完成！\n📊 總共比對 {total_count} 筆資料，其中【{success_count} 筆】已完美消除「/箱」字尾差異並成功抓到重量！\n✨ 欄位名稱已就緒。"
+        msg = f"🎉 【終極防呆版】處理完成！\n\n📊 總共比對 {total_count} 筆資料，其中【{success_count} 筆】已完美消除「/箱」字尾差異並成功抓到重量！"
+        return xlsx_data, msg
         
     except Exception as e:
         return None, f"❌ 程式執行發生錯誤，原因：{str(e)}"
 
 # --------------------------------------------------
-# 【視覺 UI 介面設計】
+# 【Streamlit 視覺 UI 介面設計】
 # --------------------------------------------------
-with gr.Blocks(title="出貨明細重量自動核對工具") as demo:
-    gr.Markdown("# 🚚 出貨明細與包裝重量自動核對系統 (終極防呆版)")
-    gr.Markdown("此版本會自動相容『1R/箱』與『1R』的寫法差異，確保兩邊代碼完美對齊。")
-    
-    with gr.Row():
-        file_ship = gr.File(label="請放入【出貨明細 Excel】(主要欄位在第 2 列)", file_types=[".xlsx", ".xls"])
-        file_weight = gr.File(label="請放入【包裝重量 Excel】(主要欄位在第 1 列)", file_types=[".xlsx", ".xls"])
-        
-    btn = gr.Button("🚀 開始自動比對並計算重量", variant="primary")
-    
-    with gr.Row():
-        status_msg = gr.Textbox(label="系統處理狀態通知", lines=3)
-        output_file = gr.File(label="✨ 點擊此處下載自動計算結果")
-        
-    btn.click(
-        fn=process_shipping_data, 
-        inputs=[file_ship, file_weight], 
-        outputs=[output_file, status_msg]
-    )
+st.title("🚚 出貨明細與包裝重量自動核對系統 (Streamlit 雲端版)")
+st.markdown("### ✨ 此版本會自動相容『1R/箱』與『1R』的寫法差異，確保兩邊代碼完美對齊。")
+st.write("---")
 
-demo.launch(server_port=7861, share=False)
+# 建立左右兩欄，放上傳按鈕
+col1, col2 = st.columns(2)
+
+with col1:
+    file_ship = st.file_uploader("請放入【出貨明細 Excel】(主要欄位在第 2 列)", type=["xlsx", "xls"])
+
+with col2:
+    file_weight = st.file_uploader("請放入【包裝重量 Excel】(主要欄位在第 1 列)", type=["xlsx", "xls"])
+
+st.write("---")
+
+# 當兩張表都丟進來後，顯示開始比對按鈕
+if file_ship and file_weight:
+    if st.button("🚀 開始自動比對並計算重量", type="primary", use_container_width=True):
+        
+        # 執行計算
+        with st.spinner("系統正在後台大清洗並對齊資料中，請稍候..."):
+            result_data, status_msg = process_shipping_data(file_ship, file_weight)
+        
+        if result_data:
+            st.success("處理成功！")
+            st.info(status_msg)
+            
+            # 製作下載按鈕
+            st.download_button(
+                label="📥 點擊此處下載自動計算結果 (.xlsx)",
+                data=result_data,
+                file_name="出貨明細_已完成重量核對.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        else:
+            st.error(status_msg)
+else:
+    st.warning("💡 請先在上方【同時上傳】兩份 Excel 檔案，系統按鈕就會出現囉！")
